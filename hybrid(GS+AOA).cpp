@@ -4,12 +4,18 @@ using namespace std;
 // ========================= Common Problem Setup =========================
 const int HOURS = 24;
 
-// Default tariff (you can override from stdin at runtime)
+// More dynamic default tariff (higher peaks to create diversity)
 vector<double> tariff_default = {
-    1,1,1,1,1,1,          // 0-5
-    2,2,2,2,2,2,2,2,2,2,2,2, // 6-17
-    5,5,5,5,              // 18-21
-    1,1                   // 22-23
+    // 0-5 (off-peak night)
+    1, 1, 1, 1, 1, 1,
+    // 6-11 (morning)
+    2, 2, 2, 2, 2, 2,
+    // 12-17 (day)
+    3, 3, 3, 3, 3, 3,
+    // 18-21 (evening peak)
+    6, 6, 7, 7,
+    // 22-23 (late night)
+    2, 2
 };
 
 struct Appliance {
@@ -18,10 +24,19 @@ struct Appliance {
     double power;   // kW
 };
 
+// Expanded appliance list (10 appliances)
+// Includes a mix of short/long, low/high power to enlarge search space
 vector<Appliance> appliances = {
-    {"Washing Machine", 2, 1.0},
-    {"Dishwasher",      1, 0.8},
-    {"Water Heater",    1, 1.5}
+    {"Washing Machine",   2, 1.0},
+    {"Dishwasher",        1, 0.8},
+    {"Water Heater",      1, 1.5},
+    {"Air Conditioner",   6, 1.2},
+    {"Refrigerator",     24, 0.2},
+    {"Electric Vehicle",  5, 3.0},
+    {"Ironing Press",     1, 1.0},
+    {"Microwave Oven",    1, 1.2},
+    {"Clothes Dryer",     3, 2.0},
+    {"Room Heater",       4, 1.5}
 };
 
 // Cost from integer starts
@@ -48,10 +63,10 @@ void print_schedule(const vector<int>& start) {
 }
 
 // ========================= GA (your style, lightly adapted) =========================
-const int GA_POP_SIZE   = 10;
-const int GA_GENERATIONS= 30;
-const double CROSSOVER_RATE = 0.8;
-const double MUTATION_RATE  = 0.2;
+const int GA_POP_SIZE   = 16;    // slightly larger population
+const int GA_GENERATIONS= 50;    // more generations for bigger search space
+const double CROSSOVER_RATE = 0.85;
+const double MUTATION_RATE  = 0.25;
 
 using Chromosome = vector<vector<int>>; // per-appliance 24-length 0/1 schedule
 
@@ -65,6 +80,7 @@ vector<int> schedule_from_start(int start, int dur) {
 // Create random valid chromosome (per-appliance contiguous block)
 Chromosome ga_createChromosome() {
     Chromosome chromosome;
+    chromosome.reserve(appliances.size());
     for (auto &app : appliances) {
         int start = rand() % (HOURS - app.duration + 1);
         chromosome.push_back(schedule_from_start(start, app.duration));
@@ -106,6 +122,8 @@ pair<Chromosome, Chromosome> ga_crossover(const Chromosome &p1, const Chromosome
     if (((double) rand() / RAND_MAX) < CROSSOVER_RATE) {
         int point = rand() % (int)appliances.size();
         Chromosome c1, c2;
+        c1.reserve(appliances.size());
+        c2.reserve(appliances.size());
         for (int i = 0; i < (int)appliances.size(); i++) {
             if (i < point) { c1.push_back(p1[i]); c2.push_back(p2[i]); }
             else           { c1.push_back(p2[i]); c2.push_back(p1[i]); }
@@ -196,8 +214,8 @@ void discretize_round_clamp(const vector<double>& x, vector<int>& start, const v
 }
 
 // AOA params
-const int AOA_POP = 20;
-const int AOA_ITER = 60;
+const int AOA_POP = 28;      // larger for more exploration
+const int AOA_ITER = 80;     // more iterations
 const double C1 = 2.0, C2 = 6.0, C3 = 2.0, C4 = 1.0, U = 0.9, L = 0.1;
 
 // Run AOA; if seedProvided==true, X[0] is initialized from seedStart
@@ -333,22 +351,16 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff, const vector<int
 
 // ========================= Main: Hybrid GA → AOA =========================
 int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
     srand((unsigned)time(0));
 
-    // 1) Read tariff or use defaults
+    // ✅ No input required, always use default tariff
     vector<double> tariff = tariff_default;
-    cout << "Use default tariff (y/n)? ";
-    char yn; cin >> yn;
-    if (yn == 'n' || yn == 'N') {
-        cout << "Enter 24 tariff values (space-separated):\n";
-        tariff.resize(HOURS);
-        for (int i = 0; i < HOURS; ++i) cin >> tariff[i];
-    } else {
-        cout << "Using default tariff.\n";
-    }
-    cout << "\n";
+    cout << "Using default tariff.\n\n";
 
-    // 2) GA phase
+    // 1) GA phase
     pair<vector<int>, double> ga_result = run_GA(tariff, true);
     vector<int> ga_best_starts = ga_result.first;
     double ga_best_cost = ga_result.second;
@@ -357,7 +369,7 @@ int main() {
     print_schedule(ga_best_starts);
     cout << "GA Best Cost = " << ga_best_cost << "\n\n";
 
-    // 3) AOA phase (seed with GA)
+    // 2) AOA phase (seed with GA)
     pair<vector<int>, double> aoa_result = run_AOA(tariff, ga_best_starts, true, true);
     vector<int> aoa_best_starts = aoa_result.first;
     double aoa_best_cost = aoa_result.second;
@@ -366,7 +378,7 @@ int main() {
     print_schedule(aoa_best_starts);
     cout << "AOA Best Cost = " << aoa_best_cost << "\n\n";
 
-    // 4) Final report
+    // 3) Final report
     vector<int> final_starts = (aoa_best_cost <= ga_best_cost) ? aoa_best_starts : ga_best_starts;
     double final_cost = min(aoa_best_cost, ga_best_cost);
 
@@ -376,3 +388,4 @@ int main() {
 
     return 0;
 }
+
