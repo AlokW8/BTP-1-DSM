@@ -1,42 +1,47 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-// ========================= Common Problem Setup =========================
 const int HOURS = 24;
 
-// More dynamic default tariff (higher peaks to create diversity)
+// Representative Time-of-Use hourly tariff (Rs / kWh)
+// Source: design based on Indian ToD policy examples & typical retail levels.
+// - Lower during daytime solar hours and late-night off-peak
+// - Higher during evening peak (18:00-22:00)
 vector<double> tariff_default = {
-    // 0-5 (off-peak night)
-    1, 1, 1, 1, 1, 1,
-    // 6-11 (morning)
-    2, 2, 2, 2, 2, 2,
-    // 12-17 (day)
-    3, 3, 3, 3, 3, 3,
-    // 18-21 (evening peak)
-    6, 6, 7, 7,
-    // 22-23 (late night)
-    2, 2
+    // 0  1   2   3   4   5
+      3.0,3.0,3.0,3.0,3.0,3.0,
+    // 6  7   8   9  10  11
+      4.5,5.0,5.0,5.0,5.0,5.0,
+    // 12 13  14  15  16  17
+      4.0,4.0,4.0,4.0,5.0,6.0,
+    // 18 19  20  21
+     12.0,12.0,11.0,10.0,
+    // 22 23
+      4.0,3.5
 };
 
+// Appliance structure (duration = contiguous hours, power = kW)
+// Values chosen from CLASP (ownership/use patterns) and typical power tables (BEE/CESC/industry).
+// See citations below for the source documents that justify these ranges.
 struct Appliance {
     string name;
-    int duration;   // contiguous hours
-    double power;   // kW
+    int duration;   // contiguous hours (typical single run duration or continuous operation)
+    double power;   // kW (typical/average)
 };
 
-// Expanded appliance list (10 appliances)
-// Includes a mix of short/long, low/high power to enlarge search space
+// Realistic household appliance list for an urban Indian home (representative)
 vector<Appliance> appliances = {
-    {"Washing Machine",   2, 1.0},
-    {"Dishwasher",        1, 0.8},
-    {"Water Heater",      1, 1.5},
-    {"Air Conditioner",   6, 1.2},
-    {"Refrigerator",     24, 0.2},
-    {"Electric Vehicle",  5, 3.0},
-    {"Ironing Press",     1, 1.0},
-    {"Microwave Oven",    1, 1.2},
-    {"Clothes Dryer",     3, 2.0},
-    {"Room Heater",       4, 1.5}
+    // name,                duration (h), power (kW)
+    {"Refrigerator",         24,         0.15},   // continuous duty: 150W average. (CLASP: fridge high penetration + monitoring). :contentReference[oaicite:6]{index=6}
+    {"Air Conditioner",       6,         1.2},    // typical split AC average draw (energy efficient model), runtime varies with seasons. :contentReference[oaicite:7]{index=7}
+    {"Electric Vehicle (EV) Charging", 5,    3.3}, // Level-1/Level-2 charger mix: ~3.3 kW common in residential chargers. (user may vary). :contentReference[oaicite:8]{index=8}
+    {"Water Heater (Geyser)", 1,         2.5},    // short run (heating), element ~2–3 kW typical. :contentReference[oaicite:9]{index=9}
+    {"Washing Machine",       1,         0.5},    // typical cycle uses ~0.4–0.6 kW average (spin/heating excluded). :contentReference[oaicite:10]{index=10}
+    {"Dishwasher",            1,         1.2},    // typical cycle 1–2 kW for water heating + motor. (if present) :contentReference[oaicite:11]{index=11}
+    {"Clothes Dryer",        2,          2.0},    // dryer cycles 1.5–3 kW; many Indian homes don’t have dryers (optional). :contentReference[oaicite:12]{index=12}
+    {"Microwave Oven",       0,          0.9},    // short bursts; set duration to 0 if you model as single minutes. (here 0 -> handle separately) :contentReference[oaicite:13]{index=13}
+    {"Ironing (Iron)",       0,          1.0},    // short bursts; keep 0 for minute-level tasks (or 1 hour if you prefer). :contentReference[oaicite:14]{index=14}
+    {"Room Heater / Fan (seasonal)", 4,    1.2}    // for heating in winter or fan loads; vary by season. :contentReference[oaicite:15]{index=15}
 };
 
 // Cost from integer starts
@@ -215,7 +220,7 @@ void discretize_round_clamp(const vector<double>& x, vector<int>& start, const v
 
 // AOA params
 const int AOA_POP = 28;      // larger for more exploration
-const int AOA_ITER = 80;     // more iterations
+const int AOA_ITER = 50;     // more iterations
 const double C1 = 2.0, C2 = 6.0, C3 = 2.0, C4 = 1.0, U = 0.9, L = 0.1;
 
 // Run AOA; if seedProvided==true, X[0] is initialized from seedStart
