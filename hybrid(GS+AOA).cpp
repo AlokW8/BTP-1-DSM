@@ -31,18 +31,33 @@ struct Appliance {
 
 // Realistic household appliance list for an urban Indian home (representative)
 vector<Appliance> appliances = {
-    // name,                duration (h), power (kW)
-    {"Refrigerator",         24,         0.15},   // continuous duty: 150W average. (CLASP: fridge high penetration + monitoring). :contentReference[oaicite:6]{index=6}
-    {"Air Conditioner",       6,         1.2},    // typical split AC average draw (energy efficient model), runtime varies with seasons. :contentReference[oaicite:7]{index=7}
-    {"Electric Vehicle (EV) Charging", 5,    3.3}, // Level-1/Level-2 charger mix: ~3.3 kW common in residential chargers. (user may vary). :contentReference[oaicite:8]{index=8}
-    {"Water Heater (Geyser)", 1,         2.5},    // short run (heating), element ~2–3 kW typical. :contentReference[oaicite:9]{index=9}
-    {"Washing Machine",       1,         0.5},    // typical cycle uses ~0.4–0.6 kW average (spin/heating excluded). :contentReference[oaicite:10]{index=10}
-    {"Dishwasher",            1,         1.2},    // typical cycle 1–2 kW for water heating + motor. (if present) :contentReference[oaicite:11]{index=11}
-    {"Clothes Dryer",        2,          2.0},    // dryer cycles 1.5–3 kW; many Indian homes don’t have dryers (optional). :contentReference[oaicite:12]{index=12}
-    {"Microwave Oven",       0,          0.9},    // short bursts; set duration to 0 if you model as single minutes. (here 0 -> handle separately) :contentReference[oaicite:13]{index=13}
-    {"Ironing (Iron)",       0,          1.0},    // short bursts; keep 0 for minute-level tasks (or 1 hour if you prefer). :contentReference[oaicite:14]{index=14}
-    {"Room Heater / Fan (seasonal)", 4,    1.2}    // for heating in winter or fan loads; vary by season. :contentReference[oaicite:15]{index=15}
+    {"Air Conditioner",      4,   2.0},      // 8 kWh / 2 kW = 4 h
+    {"Air Purifier",         6,   0.1},      // 0.6 / 0.1 = 6 h
+    {"Coffee Maker",         1,   0.4},      // 0.2 / 0.4 = 0.5 -> 1 h
+    {"Computer",             4,   0.25},     // 1.0 / 0.25 = 4 h
+    {"Digital Clock",       24,   0.0025},   // 0.06 / 0.0025 = 24 h
+    {"Dishwasher",           3,   1.33},     // 3.0 / 1.33 ≈ 2.25 -> 3 h
+    {"Hair Dryer",           1,   2.0},      // 1.0 / 2 = 0.5 -> 1 h
+    {"Electric Iron",        1,   2.0},      // 1.0 / 2 = 0.5 -> 1 h
+    {"EV Charger",           8,   4.0},      // 32 / 4 = 8 h
+    {"Exhaust Fan",          2,   0.1},      // 0.2 / 0.1 = 2 h
+    {"Fan",                  8,   0.1},      // 0.8 / 0.1 = 8 h
+    {"Food Blender",         1,   0.4},      // 0.2 / 0.4 = 0.5 -> 1 h
+    {"Induction Cooker",     1,   2.0},      // 2.0 / 2 = 1 h
+    {"LED Lights",           5,   0.08},     // 0.4 / 0.08 = 5 h
+    {"Microwave",            1,   1.5},      // 0.75 / 1.5 = 0.5 -> 1 h
+    {"Night Light",          2,   0.05},     // 0.1 / 0.05 = 2 h
+    {"Refrigerator",         6,   0.3},      // 1.8 / 0.3 = 6 h (continuous avg)
+    {"Room Heater",          3,   2.0},      // 6 / 2 = 3 h
+    {"Router WiFi",         24,   0.025},    // 0.6 / 0.025 = 24 h
+    {"Shaver",               1,   0.05},     // 0.05 / 0.05 = 1 h
+    {"Television",           3,   0.2},      // 0.6 / 0.2 = 3 h
+    {"Vacuum Cleaner",       1,   1.0},      // 0.5 / 1 = 0.5 -> 1 h
+    {"Washing Machine",      2,   0.6},      // 1.2 / 0.6 = 2 h
+    {"Water Heater",         1,   2.5},      // 2.5 / 2.5 = 1 h
+    {"Water Pump",           1,   1.5}       // 1.5 / 1.5 = 1 h
 };
+
 
 // Cost from integer starts
 double cost_from_starts(const vector<int>& start, const vector<double>& tariff) {
@@ -393,4 +408,3 @@ int main() {
 
     return 0;
 }
-
