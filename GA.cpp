@@ -128,7 +128,7 @@ void print_schedule(const vector<int>& start) {
     }
 }
 
-// ========================= GA (Hybrid part 1) =========================
+// ========================= GA (only) =========================
 const int GA_POP_SIZE   = 16;
 const int GA_GENERATIONS= 50;
 const double CROSSOVER_RATE = 0.85;
@@ -157,7 +157,7 @@ Chromosome ga_createChromosome() {
     return chromosome;
 }
 
-// Fitness for GA (lower is better)
+// Fitness for GA (lower is better) – cost only
 double ga_fitness(const Chromosome &chromosome, const vector<double>& tariff) {
     double total_cost = 0.0;
     for (int a = 0; a < (int)appliances.size(); a++) {
@@ -271,163 +271,7 @@ pair<vector<int>, double> run_GA(const vector<double>& tariff, bool verbose=true
     return {bestStarts, bestCost};
 }
 
-// ========================= AOA (Hybrid part 2) =========================
-inline double urand() { return (double)rand() / (double)RAND_MAX; }
-
-void discretize_round_clamp(const vector<double>& x, vector<int>& start, const vector<Bounds>& B) {
-    start.resize(x.size());
-    for (int i = 0; i < (int)x.size(); ++i) {
-        int v = (int)llround(x[i]);
-        if (v < B[i].lo) v = B[i].lo;
-        if (v > B[i].hi) v = B[i].hi;
-        start[i] = v;
-    }
-}
-
-// AOA params
-const int AOA_POP = 28;
-const int AOA_ITER = 50;
-const double C1 = 2.0, C2 = 6.0, C3 = 2.0, C4 = 1.0, U = 0.9, L = 0.1;
-
-// Run AOA; if seedProvided==true, X[0] is initialized from seedStart
-pair<vector<int>, double> run_AOA(const vector<double>& tariff,
-                                  const vector<int>& seedStart,
-                                  bool seedProvided,
-                                  bool verbose=true) {
-    const int D = (int)appliances.size();
-
-    vector<Bounds> B(D);
-    for (int d = 0; d < D; ++d) B[d] = get_bounds_for_appliance(d);
-
-    vector<vector<double>> X(AOA_POP, vector<double>(D));
-    vector<vector<double>> DEN(AOA_POP, vector<double>(D));
-    vector<vector<double>> VOL(AOA_POP, vector<double>(D));
-    vector<vector<double>> ACC(AOA_POP, vector<double>(D));
-
-    auto rand_in_bounds = [&](int d){
-        return B[d].lo + urand() * (B[d].hi - B[d].lo);
-    };
-
-    // init
-    for (int i = 0; i < AOA_POP; ++i) {
-        for (int d = 0; d < D; ++d) {
-            X[i][d]   = rand_in_bounds(d);
-            DEN[i][d] = urand();
-            VOL[i][d] = urand();
-            ACC[i][d] = urand();
-        }
-    }
-    // seed the best individual with GA result (if provided)
-    if (seedProvided) {
-        for (int d = 0; d < D; ++d) X[0][d] = (double)seedStart[d];
-    }
-
-    // evaluate initial best
-    double bestCost = 1e100;
-    vector<double> Xbest(D), DENbest(D), VOLbest(D), ACCbest(D);
-    for (int i = 0; i < AOA_POP; ++i) {
-        vector<int> s;
-        discretize_round_clamp(X[i], s, B);
-        double f = cost_from_starts(s, tariff);
-        if (f < bestCost) {
-            bestCost = f; Xbest = X[i]; DENbest = DEN[i]; VOLbest = VOL[i]; ACCbest = ACC[i];
-        }
-    }
-
-    vector<vector<double>> DENn(AOA_POP, vector<double>(D));
-    vector<vector<double>> VOLn(AOA_POP, vector<double>(D));
-    vector<vector<double>> ACCn(AOA_POP, vector<double>(D));
-    vector<vector<double>> ACCnorm(AOA_POP, vector<double>(D));
-
-    // main loop
-    for (int t = 1; t <= AOA_ITER; ++t) {
-        // 1) dens/vol to best
-        for (int i = 0; i < AOA_POP; ++i) {
-            for (int d = 0; d < D; ++d) {
-                DENn[i][d] = DEN[i][d] + urand() * (DENbest[d] - DEN[i][d]);
-                VOLn[i][d] = VOL[i][d] + urand() * (VOLbest[d] - VOL[i][d]);
-            }
-        }
-
-        // 2) transfer and decay
-        double TF = exp((double(t) - AOA_ITER) / (double)AOA_ITER);
-        double dens_decay = exp((double(AOA_ITER) - t) / (double)AOA_ITER) - (double)t / (double)AOA_ITER;
-
-        // 3) acceleration
-        for (int i = 0; i < AOA_POP; ++i) {
-            if (TF <= 0.5) {
-                int mr = rand() % AOA_POP;
-                for (int d = 0; d < D; ++d) {
-                    double num  = DEN[mr][d] + VOL[mr][d] * ACC[mr][d];
-                    double deno = DENn[i][d] + VOLn[i][d];
-                    ACCn[i][d] = num / (deno + 1e-12);
-                }
-            } else {
-                for (int d = 0; d < D; ++d) {
-                    double num  = DENbest[d] + VOLbest[d] * ACCbest[d];
-                    double deno = DENn[i][d] + VOLn[i][d];
-                    ACCn[i][d] = num / (deno + 1e-12);
-                }
-            }
-        }
-
-        // 4) normalize acc
-        for (int d = 0; d < D; ++d) {
-            double mn = 1e100, mx = -1e100;
-            for (int i = 0; i < AOA_POP; ++i) {
-                mn = min(mn, ACCn[i][d]);
-                mx = max(mx, ACCn[i][d]);
-            }
-            double denom = (mx - mn) + 1e-12;
-            for (int i = 0; i < AOA_POP; ++i) {
-                double z = (ACCn[i][d] - mn) / denom;
-                ACCnorm[i][d] = U * z + L;
-            }
-        }
-
-        // 5) update positions
-        for (int i = 0; i < AOA_POP; ++i) {
-            if (TF <= 0.5) {
-                int rr = rand() % AOA_POP;
-                for (int d = 0; d < D; ++d) {
-                    double step =  C1 * urand() * ACCnorm[i][d] * dens_decay * (X[rr][d] - X[i][d]);
-                    X[i][d] += step;
-                    if (X[i][d] < B[d].lo) X[i][d] = B[d].lo;
-                    if (X[i][d] > B[d].hi) X[i][d] = B[d].hi;
-                }
-            } else {
-                double Tpar = C3 * TF;
-                double P = 2.0 * urand() - C4;
-                double F = (P <= 0.5) ? +1.0 : -1.0;
-                for (int d = 0; d < D; ++d) {
-                    double step = F * C2 * urand() * ACCnorm[i][d] * dens_decay * (Tpar * Xbest[d] - X[i][d]);
-                    X[i][d] = Xbest[d] + step;
-                    if (X[i][d] < B[d].lo) X[i][d] = B[d].lo;
-                    if (X[i][d] > B[d].hi) X[i][d] = B[d].hi;
-                }
-            }
-        }
-
-        // 6) accept and update best
-        DEN.swap(DENn); VOL.swap(VOLn); ACC.swap(ACCn);
-        for (int i = 0; i < AOA_POP; ++i) {
-            vector<int> s;
-            discretize_round_clamp(X[i], s, B);
-            double f = cost_from_starts(s, tariff);
-            if (f < bestCost) {
-                bestCost = f; Xbest = X[i]; DENbest = DEN[i]; VOLbest = VOL[i]; ACCbest = ACC[i];
-            }
-        }
-
-        if (verbose) cout << "AOA Iter " << t << ": Best Cost = " << bestCost << "\n";
-    }
-
-    vector<int> bestStart;
-    discretize_round_clamp(Xbest, bestStart, B);
-    return {bestStart, bestCost};
-}
-
-// ========================= Main: Hybrid GA → AOA =========================
+// ========================= Main: GA only =========================
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
@@ -437,7 +281,7 @@ int main() {
     vector<double> tariff = tariff_CPP;
     cout << "Using CPP tariff (Critical Peak Pricing).\n\n";
 
-    // 1) GA phase
+    // GA phase
     auto ga_result = run_GA(tariff, true);
     vector<int> ga_best_starts = ga_result.first;
     double ga_best_cost = ga_result.second;
@@ -446,36 +290,10 @@ int main() {
     print_schedule(ga_best_starts);
     cout << "GA Best Cost = " << ga_best_cost << "\n\n";
 
-    // 2) AOA phase (seed with GA)
-    auto aoa_result = run_AOA(tariff, ga_best_starts, true, true);
-    vector<int> aoa_best_starts = aoa_result.first;
-    double aoa_best_cost = aoa_result.second;
+    // PAR for GA
+    double ga_PAR = compute_PAR(ga_best_starts);
 
-    cout << "\n=== AOA Best Schedule (seeded by GA) ===\n";
-    print_schedule(aoa_best_starts);
-    cout << "AOA Best Cost = " << aoa_best_cost << "\n\n";
-
-    // 3) Final report (Hybrid best)
-    vector<int> final_starts;
-    double final_cost;
-    if (aoa_best_cost <= ga_best_cost) {
-        final_starts = aoa_best_starts;
-        final_cost   = aoa_best_cost;
-    } else {
-        final_starts = ga_best_starts;
-        final_cost   = ga_best_cost;
-    }
-
-    cout << "================ FINAL BEST SCHEDULE ================\n";
-    print_schedule(final_starts);
-    cout << "Final Minimum Electricity Cost = " << final_cost << "\n\n";
-
-    // 4) PAR calculation for each algo
-    double ga_PAR    = compute_PAR(ga_best_starts);
-    double aoa_PAR   = compute_PAR(aoa_best_starts);
-    double final_PAR = compute_PAR(final_starts);
-
-    // 5) Summary table (Cost + PAR)
+    // Summary table (GA only)
     cout << fixed << setprecision(2);
     cout << "\n==================== RESULT SUMMARY TABLE ====================\n";
     cout << left << setw(20) << "Method"
@@ -488,16 +306,6 @@ int main() {
          << setw(20) << ga_best_cost
          << setw(15) << ga_PAR
          << "Genetic Algorithm best\n";
-
-    cout << left << setw(20) << "AOA"
-         << setw(20) << aoa_best_cost
-         << setw(15) << aoa_PAR
-         << "Arithmetic Optimization best\n";
-
-    cout << left << setw(20) << "Hybrid (GA->AOA)"
-         << setw(20) << final_cost
-         << setw(15) << final_PAR
-         << "Final chosen schedule\n";
 
     cout << "---------------------------------------------------------------\n\n";
 

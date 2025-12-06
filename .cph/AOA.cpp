@@ -128,150 +128,7 @@ void print_schedule(const vector<int>& start) {
     }
 }
 
-// ========================= GA (Hybrid part 1) =========================
-const int GA_POP_SIZE   = 16;
-const int GA_GENERATIONS= 50;
-const double CROSSOVER_RATE = 0.85;
-const double MUTATION_RATE  = 0.25;
-
-using Chromosome = vector<vector<int>>; // per-appliance 24-length 0/1 schedule
-
-// Build schedule array (0/1) from a start time & duration
-vector<int> schedule_from_start(int start, int dur) {
-    vector<int> v(HOURS, 0);
-    for (int i = start; i < start + dur; ++i) v[i] = 1;
-    return v;
-}
-
-// Create random valid chromosome (per-appliance contiguous block respecting type/window)
-Chromosome ga_createChromosome() {
-    Chromosome chromosome;
-    chromosome.reserve(appliances.size());
-    for (int i = 0; i < (int)appliances.size(); ++i) {
-        const Appliance &ap = appliances[i];
-        Bounds b = get_bounds_for_appliance(i);
-        int dur = ap.duration;
-        int start = b.lo + (rand() % (b.hi - b.lo + 1));
-        chromosome.push_back(schedule_from_start(start, dur));
-    }
-    return chromosome;
-}
-
-// Fitness for GA (lower is better)
-double ga_fitness(const Chromosome &chromosome, const vector<double>& tariff) {
-    double total_cost = 0.0;
-    for (int a = 0; a < (int)appliances.size(); a++) {
-        for (int h = 0; h < HOURS; h++) {
-            total_cost += chromosome[a][h] * appliances[a].power * tariff[h];
-        }
-    }
-    return total_cost;
-}
-
-// Roulette selection
-Chromosome ga_selection(const vector<Chromosome> &population, const vector<double>& tariff) {
-    vector<double> weights;
-    weights.reserve(population.size());
-    for (auto &ch : population) {
-        weights.push_back(1.0 / (ga_fitness(ch, tariff) + 1e-9));
-    }
-    double sum = accumulate(weights.begin(), weights.end(), 0.0);
-    double pick = ((double) rand() / RAND_MAX) * sum;
-    double cur = 0.0;
-
-    for (int i = 0; i < (int)population.size(); i++) {
-        cur += weights[i];
-        if (cur >= pick) return population[i];
-    }
-    return population.back();
-}
-
-// One-point crossover on appliance index
-pair<Chromosome, Chromosome> ga_crossover(const Chromosome &p1, const Chromosome &p2) {
-    if (((double) rand() / RAND_MAX) < CROSSOVER_RATE) {
-        int point = rand() % (int)appliances.size();
-        Chromosome c1, c2;
-        c1.reserve(appliances.size());
-        c2.reserve(appliances.size());
-        for (int i = 0; i < (int)appliances.size(); i++) {
-            if (i < point) { c1.push_back(p1[i]); c2.push_back(p2[i]); }
-            else           { c1.push_back(p2[i]); c2.push_back(p1[i]); }
-        }
-        return {c1, c2};
-    }
-    return {p1, p2};
-}
-
-// Mutation: resample one appliance's contiguous block respecting its bounds
-Chromosome ga_mutate(Chromosome ch) {
-    if (((double) rand() / RAND_MAX) < MUTATION_RATE) {
-        int idx = rand() % (int)appliances.size();
-        const Appliance &ap = appliances[idx];
-
-        // For fixed loads, do not mutate
-        if (ap.type == 0) return ch;
-
-        Bounds b = get_bounds_for_appliance(idx);
-        int dur = ap.duration;
-        int start = b.lo + (rand() % (b.hi - b.lo + 1));
-        ch[idx] = schedule_from_start(start, dur);
-    }
-    return ch;
-}
-
-// Convert GA chromosome to integer starts
-vector<int> ga_chromosome_to_starts(const Chromosome& ch) {
-    vector<int> starts(appliances.size(), 0);
-    for (int a = 0; a < (int)appliances.size(); ++a) {
-        int first = -1;
-        for (int h = 0; h < HOURS; ++h) {
-            if (ch[a][h] == 1) { first = h; break; }
-        }
-        if (first < 0) {
-            // Fallback to baseline/bounds
-            Bounds b = get_bounds_for_appliance(a);
-            first = b.lo;
-        }
-        starts[a] = first;
-    }
-    return starts;
-}
-
-// Run GA, return best starts + cost
-pair<vector<int>, double> run_GA(const vector<double>& tariff, bool verbose=true) {
-    vector<Chromosome> population;
-    population.reserve(GA_POP_SIZE);
-    for (int i = 0; i < GA_POP_SIZE; i++) population.push_back(ga_createChromosome());
-
-    Chromosome best = population[0];
-    double bestCost = ga_fitness(best, tariff);
-
-    for (int gen = 0; gen < GA_GENERATIONS; gen++) {
-        vector<Chromosome> newpop;
-        newpop.reserve(GA_POP_SIZE);
-        for (int i = 0; i < GA_POP_SIZE / 2; i++) {
-            Chromosome p1 = ga_selection(population, tariff);
-            Chromosome p2 = ga_selection(population, tariff);
-            auto kids = ga_crossover(p1, p2);
-            Chromosome c1 = ga_mutate(kids.first);
-            Chromosome c2 = ga_mutate(kids.second);
-            newpop.push_back(c1);
-            newpop.push_back(c2);
-        }
-        population.swap(newpop);
-
-        for (auto &ch : population) {
-            double f = ga_fitness(ch, tariff);
-            if (f < bestCost) { bestCost = f; best = ch; }
-        }
-        if (verbose) cout << "GA Gen " << gen+1 << ": Best Cost = " << bestCost << "\n";
-    }
-
-    vector<int> bestStarts = ga_chromosome_to_starts(best);
-    return {bestStarts, bestCost};
-}
-
-// ========================= AOA (Hybrid part 2) =========================
+// ========================= AOA (ONLY) =========================
 inline double urand() { return (double)rand() / (double)RAND_MAX; }
 
 void discretize_round_clamp(const vector<double>& x, vector<int>& start, const vector<Bounds>& B) {
@@ -289,7 +146,7 @@ const int AOA_POP = 28;
 const int AOA_ITER = 50;
 const double C1 = 2.0, C2 = 6.0, C3 = 2.0, C4 = 1.0, U = 0.9, L = 0.1;
 
-// Run AOA; if seedProvided==true, X[0] is initialized from seedStart
+// Run AOA; seedProvided==false → pure AOA (no GA seeding)
 pair<vector<int>, double> run_AOA(const vector<double>& tariff,
                                   const vector<int>& seedStart,
                                   bool seedProvided,
@@ -317,8 +174,8 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             ACC[i][d] = urand();
         }
     }
-    // seed the best individual with GA result (if provided)
-    if (seedProvided) {
+    // optional seeding (not used in AOA-only call)
+    if (seedProvided && (int)seedStart.size() == D) {
         for (int d = 0; d < D; ++d) X[0][d] = (double)seedStart[d];
     }
 
@@ -427,7 +284,7 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
     return {bestStart, bestCost};
 }
 
-// ========================= Main: Hybrid GA → AOA =========================
+// ========================= Main: AOA only =========================
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
@@ -437,45 +294,20 @@ int main() {
     vector<double> tariff = tariff_CPP;
     cout << "Using CPP tariff (Critical Peak Pricing).\n\n";
 
-    // 1) GA phase
-    auto ga_result = run_GA(tariff, true);
-    vector<int> ga_best_starts = ga_result.first;
-    double ga_best_cost = ga_result.second;
-
-    cout << "\n=== GA Best Schedule ===\n";
-    print_schedule(ga_best_starts);
-    cout << "GA Best Cost = " << ga_best_cost << "\n\n";
-
-    // 2) AOA phase (seed with GA)
-    auto aoa_result = run_AOA(tariff, ga_best_starts, true, true);
+    // AOA-only phase (no GA seeding: seedProvided = false)
+    vector<int> dummy_seed(appliances.size(), 0);
+    auto aoa_result = run_AOA(tariff, dummy_seed, false, true);
     vector<int> aoa_best_starts = aoa_result.first;
     double aoa_best_cost = aoa_result.second;
 
-    cout << "\n=== AOA Best Schedule (seeded by GA) ===\n";
+    cout << "\n=== AOA Best Schedule ===\n";
     print_schedule(aoa_best_starts);
     cout << "AOA Best Cost = " << aoa_best_cost << "\n\n";
 
-    // 3) Final report (Hybrid best)
-    vector<int> final_starts;
-    double final_cost;
-    if (aoa_best_cost <= ga_best_cost) {
-        final_starts = aoa_best_starts;
-        final_cost   = aoa_best_cost;
-    } else {
-        final_starts = ga_best_starts;
-        final_cost   = ga_best_cost;
-    }
+    // PAR for AOA
+    double aoa_PAR = compute_PAR(aoa_best_starts);
 
-    cout << "================ FINAL BEST SCHEDULE ================\n";
-    print_schedule(final_starts);
-    cout << "Final Minimum Electricity Cost = " << final_cost << "\n\n";
-
-    // 4) PAR calculation for each algo
-    double ga_PAR    = compute_PAR(ga_best_starts);
-    double aoa_PAR   = compute_PAR(aoa_best_starts);
-    double final_PAR = compute_PAR(final_starts);
-
-    // 5) Summary table (Cost + PAR)
+    // Summary table (AOA only)
     cout << fixed << setprecision(2);
     cout << "\n==================== RESULT SUMMARY TABLE ====================\n";
     cout << left << setw(20) << "Method"
@@ -484,20 +316,10 @@ int main() {
          << "Comment\n";
     cout << "---------------------------------------------------------------\n";
 
-    cout << left << setw(20) << "GA"
-         << setw(20) << ga_best_cost
-         << setw(15) << ga_PAR
-         << "Genetic Algorithm best\n";
-
     cout << left << setw(20) << "AOA"
          << setw(20) << aoa_best_cost
          << setw(15) << aoa_PAR
          << "Arithmetic Optimization best\n";
-
-    cout << left << setw(20) << "Hybrid (GA->AOA)"
-         << setw(20) << final_cost
-         << setw(15) << final_PAR
-         << "Final chosen schedule\n";
 
     cout << "---------------------------------------------------------------\n\n";
 

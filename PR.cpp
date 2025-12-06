@@ -3,8 +3,39 @@ using namespace std;
 
 const int HOURS = 24;
 
-// ========================= CPP Tariff (Critical Peak Pricing) =========================
-// Rs / kWh for each hour (0–23)
+// ========================= Appliance data (Table 2) =========================
+struct Appliance {
+    string name;
+    int duration;   // daily usage in hours (treated as contiguous here)
+    double power;   // kW
+};
+
+// Appliances used in simulations (from Fig. / Table 2)
+vector<Appliance> appliances = {
+    // Shiftable load appliances
+    {"Vacuum cleaner",   6, 0.7},
+    {"Water heater",    12, 5.0},
+    {"Toaster",          3, 1.5},
+    {"Water pump",       8, 1.0},
+    {"Geyser",           2, 3.5},
+    {"Dish washer",      8, 1.8},
+
+    // Non-shiftable load appliances
+    {"Washing machine",  5, 0.7},
+    {"Cloth dryer",      4, 5.0},
+    {"Electric frying pot", 2, 1.2},
+
+    // Fixed load appliances
+    {"Rice cookers",     4, 1.0},
+    {"Refrigerator",    18, 0.225},
+    {"AC",              15, 1.5},
+    {"Lights",           9, 0.25},
+    {"Television",       8, 0.2},
+    {"Oven",            10, 2.15}
+};
+
+// ========================= CPP Tariff only ====================
+// All values are in cent/kWh, 24 elements, indices 0–23.
 vector<double> tariff_CPP = {
     30,30,30,30,30,             // 0–4 base
     140,140,140,140,140,140,    // 5–10 critical peak
@@ -12,75 +43,7 @@ vector<double> tariff_CPP = {
     52,46,40,36,32,30,30        // 17–23
 };
 
-// ========================= Appliance data with type & constraints =========================
-// type: 0 = fixed, 1 = non-shiftable (limited window), 2 = shiftable
-struct Appliance {
-    string name;
-    int duration;   // contiguous hours
-    double power;   // kW
-    int type;       // 0 = fixed, 1 = non-shiftable, 2 = shiftable
-    int baseline;   // baseline start (for fixed and as center of window)
-    int window;     // half-window size for non-shiftable (ignored for fixed)
-    Appliance(string n, int d, double p, int tp, int b, int w = 3)
-        : name(n), duration(d), power(p), type(tp), baseline(b), window(w) {}
-};
-
-// Realistic household appliances (urban Indian home)
-vector<Appliance> appliances = {
-    {"Air Conditioner",      4,   2.0,   2, 18, 3},
-    {"Air Purifier",         6,   0.1,   2,  0, 3},
-    {"Coffee Maker",         1,   0.4,   1,  7, 2},
-    {"Computer",             4,   0.25,  1, 20, 3},
-    {"Digital Clock",       24,   0.0025,0,  0, 0},
-    {"Dishwasher",           3,   1.33,  2, 21, 4},
-    {"Hair Dryer",           1,   2.0,   1,  7, 2},
-    {"Electric Iron",        1,   2.0,   1,  7, 2},
-    {"EV Charger",           8,   4.0,   2, 22, 6},
-    {"Exhaust Fan",          2,   0.1,   2,  8, 3},
-    {"Fan",                  8,   0.1,   2, 20, 4},
-    {"Food Blender",         1,   0.4,   1,  8, 2},
-    {"Induction Cooker",     1,   2.0,   1, 19, 2},
-    {"LED Lights",           5,   0.08,  1, 19, 4},
-    {"Microwave",            1,   1.5,   1, 12, 2},
-    {"Night Light",          2,   0.05,  0, 22, 0},
-    {"Refrigerator",         6,   0.3,   0,  0, 0},
-    {"Room Heater",          3,   2.0,   2,  6, 3},
-    {"Router WiFi",         24,   0.025, 0,  0, 0},
-    {"Shaver",               1,   0.05,  1,  6, 2},
-    {"Television",           3,   0.2,   1, 20, 3},
-    {"Vacuum Cleaner",       1,   1.0,   2, 10, 8},
-    {"Washing Machine",      2,   0.6,   2,  9, 8},
-    {"Water Heater",         1,   2.5,   1,  6, 2},
-    {"Water Pump",           1,   1.5,   1,  5, 2}
-};
-
-// ========================= Helper: bounds per appliance (by type) =========================
-struct Bounds { int lo, hi; }; // inclusive
-
-Bounds get_bounds_for_appliance(int idx) {
-    const Appliance &ap = appliances[idx];
-    int dur = ap.duration;
-    int lo, hi;
-
-    if (ap.type == 0) {
-        // Fixed load: always at baseline, clamp to valid
-        int s = min(ap.baseline, HOURS - dur);
-        if (s < 0) s = 0;
-        lo = hi = s;
-    } else if (ap.type == 1) {
-        // Non-shiftable: limited window around baseline
-        lo = max(0, ap.baseline - ap.window);
-        hi = min(HOURS - dur, ap.baseline + ap.window);
-    } else {
-        // Shiftable: can be anywhere in 0..24-duration
-        lo = 0;
-        hi = HOURS - dur;
-    }
-    if (hi < lo) hi = lo; // safety
-    return {lo, hi};
-}
-
-// Cost from integer starts
+// ========================= Cost helpers =====================================
 double cost_from_starts(const vector<int>& start, const vector<double>& tariff) {
     double cost = 0.0;
     for (int a = 0; a < (int)appliances.size(); a++) {
@@ -94,30 +57,6 @@ double cost_from_starts(const vector<int>& start, const vector<double>& tariff) 
     return cost;
 }
 
-// Build hourly load profile (kW) from start times
-vector<double> load_profile_from_starts(const vector<int>& start) {
-    vector<double> load(HOURS, 0.0);
-    for (int a = 0; a < (int)appliances.size(); a++) {
-        int s = start[a];
-        int d = appliances[a].duration;
-        double p = appliances[a].power;
-        for (int h = s; h < s + d; ++h) {
-            load[h] += p;
-        }
-    }
-    return load;
-}
-
-// Peak-to-average ratio (PAR)
-double compute_PAR(const vector<int>& start) {
-    vector<double> load = load_profile_from_starts(start);
-    double peak = *max_element(load.begin(), load.end());
-    double sum = accumulate(load.begin(), load.end(), 0.0);
-    double avg = sum / HOURS;
-    return peak / (avg + 1e-12);
-}
-
-// Utility: print schedule given starts
 void print_schedule(const vector<int>& start) {
     for (int a = 0; a < (int)appliances.size(); a++) {
         cout << appliances[a].name << ": ";
@@ -128,7 +67,35 @@ void print_schedule(const vector<int>& start) {
     }
 }
 
-// ========================= GA (Hybrid part 1) =========================
+/************ NEW: hourly load profile & PAR ************************/
+
+// Build hourly load profile P_Lsch(t) [kW] from start times
+vector<double> hourly_load_from_starts(const vector<int>& start) {
+    vector<double> load(HOURS, 0.0);
+    for (int a = 0; a < (int)appliances.size(); ++a) {
+        int s = start[a];
+        int d = appliances[a].duration;
+        double p = appliances[a].power;
+        for (int h = s; h < s + d; ++h) {
+            load[h] += p;
+        }
+    }
+    return load;
+}
+
+// Compute PAR = (max(PL)^2)/(avg(PL)^2)
+double compute_PAR_from_starts(const vector<int>& start) {
+    vector<double> load = hourly_load_from_starts(start);
+    double peak = *max_element(load.begin(), load.end());
+    double sum = accumulate(load.begin(), load.end(), 0.0);
+    double avg  = sum / HOURS;
+    if (avg <= 0.0) return 0.0;
+    return (peak * peak) / (avg * avg);
+}
+
+/******************************************************************/
+
+// ========================= GA (same style, small tweaks) =====================
 const int GA_POP_SIZE   = 16;
 const int GA_GENERATIONS= 50;
 const double CROSSOVER_RATE = 0.85;
@@ -136,28 +103,22 @@ const double MUTATION_RATE  = 0.25;
 
 using Chromosome = vector<vector<int>>; // per-appliance 24-length 0/1 schedule
 
-// Build schedule array (0/1) from a start time & duration
 vector<int> schedule_from_start(int start, int dur) {
     vector<int> v(HOURS, 0);
     for (int i = start; i < start + dur; ++i) v[i] = 1;
     return v;
 }
 
-// Create random valid chromosome (per-appliance contiguous block respecting type/window)
 Chromosome ga_createChromosome() {
     Chromosome chromosome;
     chromosome.reserve(appliances.size());
-    for (int i = 0; i < (int)appliances.size(); ++i) {
-        const Appliance &ap = appliances[i];
-        Bounds b = get_bounds_for_appliance(i);
-        int dur = ap.duration;
-        int start = b.lo + (rand() % (b.hi - b.lo + 1));
-        chromosome.push_back(schedule_from_start(start, dur));
+    for (auto &app : appliances) {
+        int start = rand() % (HOURS - app.duration + 1);
+        chromosome.push_back(schedule_from_start(start, app.duration));
     }
     return chromosome;
 }
 
-// Fitness for GA (lower is better)
 double ga_fitness(const Chromosome &chromosome, const vector<double>& tariff) {
     double total_cost = 0.0;
     for (int a = 0; a < (int)appliances.size(); a++) {
@@ -168,7 +129,6 @@ double ga_fitness(const Chromosome &chromosome, const vector<double>& tariff) {
     return total_cost;
 }
 
-// Roulette selection
 Chromosome ga_selection(const vector<Chromosome> &population, const vector<double>& tariff) {
     vector<double> weights;
     weights.reserve(population.size());
@@ -186,7 +146,6 @@ Chromosome ga_selection(const vector<Chromosome> &population, const vector<doubl
     return population.back();
 }
 
-// One-point crossover on appliance index
 pair<Chromosome, Chromosome> ga_crossover(const Chromosome &p1, const Chromosome &p2) {
     if (((double) rand() / RAND_MAX) < CROSSOVER_RATE) {
         int point = rand() % (int)appliances.size();
@@ -202,24 +161,16 @@ pair<Chromosome, Chromosome> ga_crossover(const Chromosome &p1, const Chromosome
     return {p1, p2};
 }
 
-// Mutation: resample one appliance's contiguous block respecting its bounds
 Chromosome ga_mutate(Chromosome ch) {
     if (((double) rand() / RAND_MAX) < MUTATION_RATE) {
         int idx = rand() % (int)appliances.size();
-        const Appliance &ap = appliances[idx];
-
-        // For fixed loads, do not mutate
-        if (ap.type == 0) return ch;
-
-        Bounds b = get_bounds_for_appliance(idx);
-        int dur = ap.duration;
-        int start = b.lo + (rand() % (b.hi - b.lo + 1));
+        int dur = appliances[idx].duration;
+        int start = rand() % (HOURS - dur + 1);
         ch[idx] = schedule_from_start(start, dur);
     }
     return ch;
 }
 
-// Convert GA chromosome to integer starts
 vector<int> ga_chromosome_to_starts(const Chromosome& ch) {
     vector<int> starts(appliances.size(), 0);
     for (int a = 0; a < (int)appliances.size(); ++a) {
@@ -227,17 +178,12 @@ vector<int> ga_chromosome_to_starts(const Chromosome& ch) {
         for (int h = 0; h < HOURS; ++h) {
             if (ch[a][h] == 1) { first = h; break; }
         }
-        if (first < 0) {
-            // Fallback to baseline/bounds
-            Bounds b = get_bounds_for_appliance(a);
-            first = b.lo;
-        }
+        if (first < 0) first = 0;
         starts[a] = first;
     }
     return starts;
 }
 
-// Run GA, return best starts + cost
 pair<vector<int>, double> run_GA(const vector<double>& tariff, bool verbose=true) {
     vector<Chromosome> population;
     population.reserve(GA_POP_SIZE);
@@ -271,7 +217,16 @@ pair<vector<int>, double> run_GA(const vector<double>& tariff, bool verbose=true
     return {bestStarts, bestCost};
 }
 
-// ========================= AOA (Hybrid part 2) =========================
+// ========================= AOA (same as before) =============================
+struct Bounds { int lo, hi; };
+
+vector<Bounds> aoa_bounds() {
+    vector<Bounds> b;
+    b.reserve(appliances.size());
+    for (auto &ap : appliances) b.push_back({0, HOURS - ap.duration});
+    return b;
+}
+
 inline double urand() { return (double)rand() / (double)RAND_MAX; }
 
 void discretize_round_clamp(const vector<double>& x, vector<int>& start, const vector<Bounds>& B) {
@@ -289,15 +244,12 @@ const int AOA_POP = 28;
 const int AOA_ITER = 50;
 const double C1 = 2.0, C2 = 6.0, C3 = 2.0, C4 = 1.0, U = 0.9, L = 0.1;
 
-// Run AOA; if seedProvided==true, X[0] is initialized from seedStart
 pair<vector<int>, double> run_AOA(const vector<double>& tariff,
                                   const vector<int>& seedStart,
                                   bool seedProvided,
                                   bool verbose=true) {
     const int D = (int)appliances.size();
-
-    vector<Bounds> B(D);
-    for (int d = 0; d < D; ++d) B[d] = get_bounds_for_appliance(d);
+    const vector<Bounds> B = aoa_bounds();
 
     vector<vector<double>> X(AOA_POP, vector<double>(D));
     vector<vector<double>> DEN(AOA_POP, vector<double>(D));
@@ -308,7 +260,6 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
         return B[d].lo + urand() * (B[d].hi - B[d].lo);
     };
 
-    // init
     for (int i = 0; i < AOA_POP; ++i) {
         for (int d = 0; d < D; ++d) {
             X[i][d]   = rand_in_bounds(d);
@@ -317,12 +268,10 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             ACC[i][d] = urand();
         }
     }
-    // seed the best individual with GA result (if provided)
     if (seedProvided) {
         for (int d = 0; d < D; ++d) X[0][d] = (double)seedStart[d];
     }
 
-    // evaluate initial best
     double bestCost = 1e100;
     vector<double> Xbest(D), DENbest(D), VOLbest(D), ACCbest(D);
     for (int i = 0; i < AOA_POP; ++i) {
@@ -339,9 +288,7 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
     vector<vector<double>> ACCn(AOA_POP, vector<double>(D));
     vector<vector<double>> ACCnorm(AOA_POP, vector<double>(D));
 
-    // main loop
     for (int t = 1; t <= AOA_ITER; ++t) {
-        // 1) dens/vol to best
         for (int i = 0; i < AOA_POP; ++i) {
             for (int d = 0; d < D; ++d) {
                 DENn[i][d] = DEN[i][d] + urand() * (DENbest[d] - DEN[i][d]);
@@ -349,11 +296,9 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             }
         }
 
-        // 2) transfer and decay
         double TF = exp((double(t) - AOA_ITER) / (double)AOA_ITER);
         double dens_decay = exp((double(AOA_ITER) - t) / (double)AOA_ITER) - (double)t / (double)AOA_ITER;
 
-        // 3) acceleration
         for (int i = 0; i < AOA_POP; ++i) {
             if (TF <= 0.5) {
                 int mr = rand() % AOA_POP;
@@ -371,7 +316,6 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             }
         }
 
-        // 4) normalize acc
         for (int d = 0; d < D; ++d) {
             double mn = 1e100, mx = -1e100;
             for (int i = 0; i < AOA_POP; ++i) {
@@ -385,7 +329,6 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             }
         }
 
-        // 5) update positions
         for (int i = 0; i < AOA_POP; ++i) {
             if (TF <= 0.5) {
                 int rr = rand() % AOA_POP;
@@ -400,7 +343,8 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
                 double P = 2.0 * urand() - C4;
                 double F = (P <= 0.5) ? +1.0 : -1.0;
                 for (int d = 0; d < D; ++d) {
-                    double step = F * C2 * urand() * ACCnorm[i][d] * dens_decay * (Tpar * Xbest[d] - X[i][d]);
+                    double step = F * C2 * urand() * ACCnorm[i][d] * dens_decay
+                                  * (Tpar * Xbest[d] - X[i][d]);
                     X[i][d] = Xbest[d] + step;
                     if (X[i][d] < B[d].lo) X[i][d] = B[d].lo;
                     if (X[i][d] > B[d].hi) X[i][d] = B[d].hi;
@@ -408,7 +352,6 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
             }
         }
 
-        // 6) accept and update best
         DEN.swap(DENn); VOL.swap(VOLn); ACC.swap(ACCn);
         for (int i = 0; i < AOA_POP; ++i) {
             vector<int> s;
@@ -423,83 +366,87 @@ pair<vector<int>, double> run_AOA(const vector<double>& tariff,
     }
 
     vector<int> bestStart;
-    discretize_round_clamp(Xbest, bestStart, B);
+    discretize_round_clamp(Xbest, bestStart, aoa_bounds());
     return {bestStart, bestCost};
 }
 
-// ========================= Main: Hybrid GA → AOA =========================
+// ========================= Baseline (unscheduled) ===========================
+vector<int> baseline_unscheduled() {
+    vector<int> s(appliances.size(), 0); // everyone starts at hour 0
+    return s;
+}
+
+// ========================= Main (CPP only) ==================================
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
     srand((unsigned)time(0));
 
-    vector<double> tariff = tariff_CPP;
-    cout << "Using CPP tariff (Critical Peak Pricing).\n\n";
-
-    // 1) GA phase
-    auto ga_result = run_GA(tariff, true);
-    vector<int> ga_best_starts = ga_result.first;
-    double ga_best_cost = ga_result.second;
-
-    cout << "\n=== GA Best Schedule ===\n";
-    print_schedule(ga_best_starts);
-    cout << "GA Best Cost = " << ga_best_cost << "\n\n";
-
-    // 2) AOA phase (seed with GA)
-    auto aoa_result = run_AOA(tariff, ga_best_starts, true, true);
-    vector<int> aoa_best_starts = aoa_result.first;
-    double aoa_best_cost = aoa_result.second;
-
-    cout << "\n=== AOA Best Schedule (seeded by GA) ===\n";
-    print_schedule(aoa_best_starts);
-    cout << "AOA Best Cost = " << aoa_best_cost << "\n\n";
-
-    // 3) Final report (Hybrid best)
-    vector<int> final_starts;
-    double final_cost;
-    if (aoa_best_cost <= ga_best_cost) {
-        final_starts = aoa_best_starts;
-        final_cost   = aoa_best_cost;
-    } else {
-        final_starts = ga_best_starts;
-        final_cost   = ga_best_cost;
-    }
-
-    cout << "================ FINAL BEST SCHEDULE ================\n";
-    print_schedule(final_starts);
-    cout << "Final Minimum Electricity Cost = " << final_cost << "\n\n";
-
-    // 4) PAR calculation for each algo
-    double ga_PAR    = compute_PAR(ga_best_starts);
-    double aoa_PAR   = compute_PAR(aoa_best_starts);
-    double final_PAR = compute_PAR(final_starts);
-
-    // 5) Summary table (Cost + PAR)
     cout << fixed << setprecision(2);
-    cout << "\n==================== RESULT SUMMARY TABLE ====================\n";
-    cout << left << setw(20) << "Method"
-         << setw(20) << "Cost (Rs)"
-         << setw(15) << "PAR"
-         << "Comment\n";
-    cout << "---------------------------------------------------------------\n";
 
-    cout << left << setw(20) << "GA"
-         << setw(20) << ga_best_cost
-         << setw(15) << ga_PAR
-         << "Genetic Algorithm best\n";
+    cout << "\n================ Tariff: CPP ================\n";
 
-    cout << left << setw(20) << "AOA"
-         << setw(20) << aoa_best_cost
-         << setw(15) << aoa_PAR
-         << "Arithmetic Optimization best\n";
+    // 0) Unscheduled
+    vector<int> base = baseline_unscheduled();
+    double cost_unscheduled = cost_from_starts(base, tariff_CPP);
+    double par_unscheduled  = compute_PAR_from_starts(base);
+    cout << "Unscheduled cost = " << cost_unscheduled << " cent\n";
+    cout << "Unscheduled PAR  = " << par_unscheduled  << "\n\n";
 
-    cout << left << setw(20) << "Hybrid (GA->AOA)"
-         << setw(20) << final_cost
-         << setw(15) << final_PAR
-         << "Final chosen schedule\n";
+    // 1) GA only
+    auto ga_res = run_GA(tariff_CPP, true);
+    vector<int> ga_best = ga_res.first;
+    double ga_cost = ga_res.second;
+    double ga_par  = compute_PAR_from_starts(ga_best);
+    cout << "\nGA best cost (CPP) = " << ga_cost << " cent\n";
+    cout << "GA PAR (CPP)       = " << ga_par  << "\n";
 
-    cout << "---------------------------------------------------------------\n\n";
+    // 2) AOA only (no GA seed)
+    vector<int> dummy;
+    auto aoa_res = run_AOA(tariff_CPP, dummy, false, true);
+    vector<int> aoa_best = aoa_res.first;
+    double aoa_cost = aoa_res.second;
+    double aoa_par  = compute_PAR_from_starts(aoa_best);
+    cout << "\nAOA best cost (CPP) = " << aoa_cost << " cent\n";
+    cout << "AOA PAR (CPP)       = " << aoa_par  << "\n";
+
+    // 3) Hybrid GA → AOA (HAG)
+    auto hag_res = run_AOA(tariff_CPP, ga_best, true, true);
+    vector<int> hag_best = hag_res.first;
+    double hag_cost = hag_res.second;
+    double hag_par  = compute_PAR_from_starts(hag_best);
+    cout << "\nHybrid GA→AOA (HAG) best cost (CPP) = "
+         << hag_cost << " cent\n";
+    cout << "HAG PAR (CPP)                      = "
+         << hag_par  << "\n";
+
+    // Final small tables
+    cout << "\n\n========== Result Table (Total electricity cost, cent) ==========\n";
+    cout << left << setw(8) << "Tariff"
+         << setw(15) << "Unscheduled"
+         << setw(10) << "GA"
+         << setw(10) << "AOA"
+         << setw(10) << "HAG" << "\n";
+
+    cout << left << setw(8) << "CPP"
+         << setw(15) << cost_unscheduled
+         << setw(10) << ga_cost
+         << setw(10) << aoa_cost
+         << setw(10) << hag_cost << "\n";
+
+    cout << "\n========== PAR Table (dimensionless) ==========\n";
+    cout << left << setw(8) << "Tariff"
+         << setw(15) << "Unscheduled"
+         << setw(10) << "GA"
+         << setw(10) << "AOA"
+         << setw(10) << "HAG" << "\n";
+
+    cout << left << setw(8) << "CPP"
+         << setw(15) << par_unscheduled
+         << setw(10) << ga_par
+         << setw(10) << aoa_par
+         << setw(10) << hag_par << "\n";
 
     return 0;
 }
