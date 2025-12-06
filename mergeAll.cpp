@@ -689,28 +689,20 @@ int main() {
         // Baseline metrics in this context
         Metrics baseMetrics = compute_metrics(baselineStarts, ctx);
 
-        // 1) GA phase
-        // cout << "Running GA...\n";
+        // 1) GA phase (GA alone)
         auto ga_res = run_GA_multi(ctx, true);
         vector<int> ga_best_starts = ga_res.first;
         Metrics gaMetrics = compute_metrics(ga_best_starts, ctx);
 
-        // 2) AOA phase (seeded by GA)
-        // cout << "Running AOA...\n";
-        auto aoa_res = run_AOA_multi(ctx, ga_best_starts, true, true);
-        vector<int> aoa_best_starts = aoa_res.first;
-        Metrics aoaMetrics = compute_metrics(aoa_best_starts, ctx);
+        // 2) AOA alone (directly on data, no GA seeding)
+        auto aoa_alone_res = run_AOA_multi(ctx, baselineStarts, /*seedProvided=*/false, true);
+        vector<int> aoa_alone_starts = aoa_alone_res.first;
+        Metrics aoaAloneMetrics = compute_metrics(aoa_alone_starts, ctx);
 
-        // 3) Hybrid final (best of GA vs AOA by weighted objective)
-        vector<int> final_starts;
-        Metrics finalMetrics;
-        if (aoaMetrics.weighted <= gaMetrics.weighted) {
-            final_starts  = aoa_best_starts;
-            finalMetrics  = aoaMetrics;
-        } else {
-            final_starts  = ga_best_starts;
-            finalMetrics  = gaMetrics;
-        }
+        // 3) HYBRID: AOA started from GA result (GA -> AOA)
+        auto hybrid_res = run_AOA_multi(ctx, ga_best_starts, /*seedProvided=*/true, true);
+        vector<int> hybrid_starts = hybrid_res.first;
+        Metrics hybridMetrics = compute_metrics(hybrid_starts, ctx);
 
         // ---------- Tabular output for this weight set ----------
         cout << "\nRESULT TABLE for Weight Set " << (w+1) << ":\n";
@@ -734,16 +726,11 @@ int main() {
         };
 
         print_row("Baseline", baseMetrics);
-        print_row("GA",       gaMetrics);
-        print_row("AOA",      aoaMetrics);
-        print_row("Hybrid",   finalMetrics);
+        print_row("GA",       gaMetrics);        // GA alone
+        print_row("AOA",      aoaAloneMetrics);  // AOA alone (no GA)
+        print_row("Hybrid",   hybridMetrics);    // AOA seeded with GA (GA+AOA)
 
         cout << string(75, '-') << "\n";
-
-        // (Optional) you can also print final schedule:
-        // cout << "\nHybrid final schedule (starts) for this weight set:\n";
-        // print_schedule_starts(final_starts);
-        // cout << "\n";
     }
 
     cout << "\nDone. Press Enter to exit...";
